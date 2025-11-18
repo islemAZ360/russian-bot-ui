@@ -1,104 +1,77 @@
 import streamlit as st
 import telebot
 import google.generativeai as genai
-import threading
 import time
 
-# --- واجهة المستخدم (UI Design) ---
-st.set_page_config(page_title="Russian Bot Host", page_icon="🇷🇺", layout="centered")
+# --- إعداد الصفحة ---
+st.set_page_config(page_title="Russian Bot Debugger", page_icon="🛠️")
 
-st.title("🇷🇺 المعلم الروسي الذكي")
-st.write("لوحة تحكم لربط تليجرام مع الذكاء الاصطناعي لتعلم الروسية")
-
-st.divider()
+st.title("🛠️ وضع إصلاح البوت")
+st.warning("⚠️ ملاحظة: عند تشغيل البوت، ستظهر دائرة التحميل في الأعلى باستمرار. هذا طبيعي! لا تغلق الصفحة.")
 
 # --- المدخلات ---
-col1, col2 = st.columns(2)
-with col1:
-    tg_token = st.text_input("Telegram Bot Token", type="password", placeholder="أدخل توكن تليجرام")
-with col2:
-    gemini_key = st.text_input("Gemini API Key", type="password", placeholder="أدخل مفتاح Gemini")
+tg_token = st.text_input("Telegram Token", type="password")
+gemini_key = st.text_input("Gemini API Key", type="password")
 
-# --- متغيرات الحالة ---
-if 'bot_running' not in st.session_state:
-    st.session_state.bot_running = False
-if 'logs' not in st.session_state:
-    st.session_state.logs = []
-
-# --- دالة عرض السجلات ---
-def log_message(msg):
-    timestamp = time.strftime("%H:%M:%S")
-    st.session_state.logs.append(f"[{timestamp}] {msg}")
-
-# --- منطق البوت ---
-def run_bot(telegram_token, gemini_api_key):
+# --- دالة لاختبار مفتاح Gemini ---
+def test_gemini(key):
     try:
-        genai.configure(api_key=gemini_api_key)
+        genai.configure(api_key=key)
         model = genai.GenerativeModel('gemini-pro')
-        bot = telebot.TeleBot(telegram_token)
-        
-        # الذاكرة المؤقتة
-        user_memory = {}
-
-        system_prompt = """
-        أنت خبير لغة روسية. حلل الجملة، استخرج الأفعال وصيغتها (СВ/НСВ)، والكلمات الصعبة.
-        تذكر دائماً ما يرسله المستخدم لتبني عليه لاحقاً.
-        """
-
-        @bot.message_handler(commands=['start'])
-        def start(message):
-            bot.reply_to(message, "أهلاً! أنا جاهز لتحليل الروسية.")
-            log_message(f"New user started: {message.chat.id}")
-
-        @bot.message_handler(func=lambda m: True)
-        def handle_all(message):
-            user_id = message.chat.id
-            text = message.text
-            log_message(f"Received: {text} from {user_id}")
-            
-            # السياق من الذاكرة
-            history = user_memory.get(user_id, [])
-            context = f"سياق سابق: {history[-3:]}" if history else ""
-            
-            full_prompt = f"{system_prompt}\n{context}\nUser said: {text}\nAnalyze in Arabic:"
-            
-            try:
-                response = model.generate_content(full_prompt).text
-                bot.reply_to(message, response)
-                
-                if user_id not in user_memory: user_memory[user_id] = []
-                user_memory[user_id].append(text)
-                
-                log_message(f"Replied to {user_id}")
-            except Exception as e:
-                log_message(f"Error: {e}")
-
-        log_message("Bot started polling...")
-        bot.infinity_polling()
-        
+        response = model.generate_content("Test connection")
+        return True, "✅ اتصال Gemini سليم!"
     except Exception as e:
-        log_message(f"Critical Error: {e}")
+        return False, f"❌ خطأ في Gemini: {e}"
 
-# --- أزرار التحكم ---
-st.subheader("حالة التشغيل")
-
-if st.button("🚀 تشغيل البوت"):
+# --- التشغيل ---
+if st.button("تشغيل البوت (Start)"):
     if not tg_token or not gemini_key:
-        st.error("الرجاء إدخال المفاتيح أولاً!")
+        st.error("أدخل المفاتيح أولاً!")
     else:
-        if not st.session_state.bot_running:
-            st.session_state.bot_running = True
-            st.success("تم بدء تشغيل البوت في الخلفية!")
-            # تشغيل البوت في Thread منفصل لكي لا يجمد الموقع
-            t = threading.Thread(target=run_bot, args=(tg_token, gemini_key))
-            t.start()
+        # 1. اختبار Gemini أولاً
+        status, msg = test_gemini(gemini_key)
+        if not status:
+            st.error(msg)
         else:
-            st.warning("البوت يعمل بالفعل!")
+            st.success(msg)
+            st.info("جاري الاتصال بتليجرام... ابق في هذه الصفحة.")
+            
+            # إعداد البوت
+            try:
+                bot = telebot.TeleBot(tg_token)
+                genai.configure(api_key=gemini_key)
+                model = genai.GenerativeModel('gemini-pro')
 
-# --- عرض السجلات ---
-st.divider()
-st.subheader("📝 سجل العمليات (Logs)")
-log_container = st.container()
-with log_container:
-    for log in reversed(st.session_state.logs[-10:]): # عرض آخر 10 عمليات
-        st.code(log, language="text")
+                # رسالة ترحيب
+                @bot.message_handler(commands=['start'])
+                def send_welcome(message):
+                    bot.reply_to(message, "أهلاً! أنا أعمل الآن. أرسل لي جملة.")
+
+                # معالجة الرسائل
+                @bot.message_handler(func=lambda m: True)
+                def handle_message(message):
+                    user_text = message.text
+                    # طباعة في الشاشة السوداء للتأكد
+                    print(f"New Message: {user_text}") 
+                    
+                    prompt = f"""
+                    حلل الجملة الروسية التالية، استخرج الأفعال (СВ/НСВ) والكلمات الصعبة ومعانيها بالعربية:
+                    "{user_text}"
+                    """
+                    
+                    try:
+                        # محاولة التحليل
+                        bot.send_chat_action(message.chat.id, 'typing') # يظهر "جاري الكتابة"
+                        response = model.generate_content(prompt)
+                        bot.reply_to(message, response.text)
+                    except Exception as e:
+                        # إذا فشل الذكاء الاصطناعي، أرسل الخطأ للمستخدم
+                        error_msg = f"⚠️ حدث خطأ تقني:\n{str(e)}"
+                        bot.reply_to(message, error_msg)
+                        print(f"Error: {e}")
+
+                # تشغيل البوت (هذا سيجعل الصفحة في حالة تحميل دائم)
+                bot.infinity_polling(timeout=10, long_polling_timeout=5)
+                
+            except Exception as e:
+                st.error(f"فشل تشغيل البوت: {e}")
